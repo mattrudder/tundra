@@ -53,6 +53,13 @@ local win81_sdk_dir = {
   ["lib"] = "lib\\winv6.3\\um",
 }
 
+-- NOTE: Track include/lib dir versions toward final release of msvc2015
+local win10_sdk_dir = {
+  ["bin"] = "bin",
+  ["include"] = "include\\10.0.10069.0",
+  ["lib"] = "lib\\10.0.10069.0\\um",
+}
+
 local pre_win8_sdk = {
   ["x86"] = {
     ["bin"] = "",
@@ -84,16 +91,40 @@ local post_win8_sdk = {
   },
 }
 
--- Each quadruplet specifies a registry key value that gets us the SDK location, 
--- followed by a folder structure (for each supported target architecture) 
+local post_win10_sdk = {
+  ["x86"] = {
+    ["bin"] = "x86",
+    ["include"] = { "shared", "ucrt", "um" },
+    ["lib"] = "x86",
+  },
+  ["x64"] = {
+    ["bin"] = "x64",
+    ["include"] = { "shared", "ucrt", "um" },
+    ["lib"] = "x64",
+  },
+  ["arm"] = {
+    ["bin"] = "arm",
+    ["include"] = { "shared", "ucrt", "um" },
+    ["lib"] = "arm",
+  },
+  ["arm64"] = {
+    ["bin"] = "arm64",
+    ["include"] = { "shared", "ucrt", "um" },
+    ["lib"] = "arm64",
+  },
+}
+
+-- Each quadruplet specifies a registry key value that gets us the SDK location,
+-- followed by a folder structure (for each supported target architecture)
 -- and finally the corresponding bin, include and lib folder's relative location
 
-local sdk_map = { 
+local sdk_map = {
   ["9.0"] = { "SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows\\v6.0A", "InstallationFolder", pre_win8_sdk_dir, pre_win8_sdk },
   ["10.0"] = { "SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows\\v7.0A", "InstallationFolder", pre_win8_sdk_dir, pre_win8_sdk },
-  ["10.1"] = { "SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows\\v7.1A", "InstallationFolder", pre_win8_sdk_dir, pre_win8_sdk },  
+  ["10.1"] = { "SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows\\v7.1A", "InstallationFolder", pre_win8_sdk_dir, pre_win8_sdk },
   ["11.0"] = { "SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots", "KitsRoot", win8_sdk_dir, post_win8_sdk },
   ["12.0"] = { "SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots", "KitsRoot81", win81_sdk_dir, post_win8_sdk },
+  ["14.0"] = { "SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots", "KitsRoot10", win10_sdk_dir, post_win10_sdk },
 }
 
 local function get_host_arch()
@@ -128,15 +159,15 @@ end
 function apply_msvc_visual_studio(version, env, options)
 
   -- NOTE:  don't make changes to  `env` until you've asserted
-  --        that the requested version is in fact installed, 
+  --        that the requested version is in fact installed,
   --        the `vs-wild` toolset will call this function
-  --        repeatedly with a the next version but the same `env`, 
+  --        repeatedly with a the next version but the same `env`,
   --        if a version fails (assert/error)
 
   if native.host_platform ~= "windows" then
     error("the msvc toolset only works on windows hosts")
   end
-  
+
   -- Load basic MSVC environment setup first.
   -- We're going to replace the paths to some tools.
   tundra.unitgen.load_toolset('msvc', env)
@@ -154,31 +185,31 @@ function apply_msvc_visual_studio(version, env, options)
 
   local vc_lib
   local vc_bin
-  
+
   vc_bin =  vc_bin_map[host_arch][target_arch]
   if not vc_bin then
     errorf("can't build target arch %s on host arch %s", target_arch, host_arch)
   end
   vc_bin =  vs_root .. "vc\\bin\\" .. vc_bin
-  
+
   vc_lib =  vs_root .. "vc\\lib\\" .. vc_lib_map[host_arch][target_arch]
 
   --
   -- Now fix up the SDK
   --
-  
+
   local sdk_root
   local sdk_bin
   local sdk_include = {}
   local sdk_lib
-  
+
   local sdk = sdk_map[sdk_version]
   assert(sdk, "The requested version of Visual Studio isn't supported")
 
   sdk_root = native.reg_query("HKLM", sdk[1], sdk[2])
   assert(sdk_root, "The requested version of the SDK isn't installed")
   sdk_root = string.gsub(sdk_root, "\\+$", "\\")
-  
+
   local sdk_dir_base = sdk[3]
 
   local sdk_dir = sdk[4][target_arch]
@@ -211,13 +242,13 @@ function apply_msvc_visual_studio(version, env, options)
   if sdk_version == "9.0" then
     env:set("RCOPTS", "") -- clear the "/nologo" option (it was first added in VS2010)
   end
- 
-  if version == "12.0" then
+
+  if version == "12.0" or version == "14.0" then
     -- Force MSPDBSRV.EXE
     env:set("CCOPTS", "/FS")
     env:set("CXXOPTS", "/FS")
   end
- 
+
   -- Wire-up the external environment
 
   env:set_external_env_var('VSINSTALLDIR', vs_root)
@@ -253,16 +284,26 @@ function apply_msvc_visual_studio(version, env, options)
 
   if "x86" == host_arch then
     path[#path + 1] = vs_root .. "\\VC\\Bin"
+    if "arm" == target_arch then
+      path[#path + 1] = vs_root .. "\\VC\\Bin\\x86_arm"
+    elseif "x64" == target_arch then
+      path[#path + 1] = vs_root .. "\\VC\\Bin\\x86_amd64"
+    end
   elseif "x64" == host_arch then
     path[#path + 1] = vs_root .. "\\VC\\Bin\\amd64"
+    if "arm" == target_arch then
+      path[#path + 1] = vs_root .. "\\VC\\Bin\\amd64_arm"
+    elseif "x86" == target_arch then
+      path[#path + 1] = vs_root .. "\\VC\\Bin\\amd64_x86"
+    end
   elseif "arm" == host_arch then
     path[#path + 1] = vs_root .. "\\VC\\Bin\\arm"
   end
-  
+
   path[#path + 1] = vs_root .. "\\Common7\\IDE"
 
-  path[#path + 1] = env:get_external_env_var('PATH') 
+  path[#path + 1] = env:get_external_env_var('PATH')
 
   env:set_external_env_var("PATH", table.concat(path, ';'))
-   
+
 end
